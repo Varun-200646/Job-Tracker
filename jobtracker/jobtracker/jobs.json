@@ -1,0 +1,41 @@
+{
+  "testuser": [
+    {
+      "id": 1775402722909,
+      "role": "Test Role",
+      "company": "Test Corp",
+      "location": "",
+      "type": "Full-time",
+      "salary": "",
+      "status": "interview",
+      "date": "2026-04-05",
+      "notes": "",
+      "resumeUrl": null,
+      "resumeOriginalName": null
+    },
+    {
+      "id": 1775401435153,
+      "role": "Fix test",
+      "company": "FixCorp",
+      "location": "",
+      "type": "Full-time",
+      "salary": "",
+      "status": "interview",
+      "date": "2026-04-05",
+      "notes": ""
+    }
+  ],
+  "VarunMhatre": [
+    {
+      "id": 1775401812810,
+      "role": "frontend",
+      "company": "google",
+      "location": "remote",
+      "type": "Full-time",
+      "salary": "12lpa",
+      "status": "rejected",
+      "date": "2026-04-05",
+      "notes": ""
+    }
+  ]
+}

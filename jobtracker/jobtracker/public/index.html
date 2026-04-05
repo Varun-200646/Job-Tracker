@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>JobTracker — Application Manager</title>
+  <meta name="description" content="Track your job applications with a Kanban board, stats dashboard and more."/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="/css/style.css"/>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💼</text></svg>"/>
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────────────── -->
+<header>
+  <div class="header-inner">
+    <div class="logo">job<em>tracker</em></div>
+
+    <div class="nav-tabs">
+      <button class="nav-tab active" data-page="board">
+        📋 Board <span class="tab-count">0</span>
+      </button>
+      <button class="nav-tab" data-page="stats">
+        📊 Analytics
+      </button>
+    </div>
+
+    <div class="header-actions">
+      <button class="btn btn-primary" id="btn-add-job">+ Add Job</button>
+      <button id="theme-toggle" aria-label="Toggle theme">🌙</button>
+      <button class="btn btn-ghost" id="btn-logout" style="display:none">Logout</button>
+    </div>
+  </div>
+</header>
+
+<!-- ── Auth Section ────────────────────────────────────────── -->
+<div id="auth-container" class="auth-container">
+  <div class="auth-card">
+    <div class="logo" style="font-size: 24px; margin-bottom: 24px; text-align: center;">job<em>tracker</em></div>
+    
+    <div id="login-form-wrap">
+      <h2 style="margin-bottom: 8px;">Welcome Back</h2>
+      <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 24px;">Please login to your account</p>
+      
+      <form id="login-form">
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label for="l-username">Username</label>
+          <input type="text" id="l-username" placeholder="Enter username" required/>
+        </div>
+        <div class="form-group" style="margin-bottom: 24px;">
+          <label for="l-password">Password</label>
+          <input type="password" id="l-password" placeholder="••••••••" required/>
+        </div>
+        <button type="submit" class="btn btn-primary" style="width: 100%; justify-content: center; height: 42px;">Login</button>
+      </form>
+      <p style="text-align: center; margin-top: 20px; font-size: 13px;">
+        Don't have an account? <a href="#" id="show-signup" style="color: var(--accent); font-weight: 600; text-decoration: none;">Create one</a>
+      </p>
+    </div>
+
+    <div id="signup-form-wrap" style="display: none;">
+      <h2 style="margin-bottom: 8px;">Create Account</h2>
+      <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 24px;">Join JobTracker today</p>
+      
+      <form id="signup-form">
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label for="s-username">Username</label>
+          <input type="text" id="s-username" placeholder="Choose a username" required/>
+        </div>
+        <div class="form-group" style="margin-bottom: 24px;">
+          <label for="s-password">Password</label>
+          <input type="password" id="s-password" placeholder="••••••••" required/>
+        </div>
+        <button type="submit" class="btn btn-primary" style="width: 100%; justify-content: center; height: 42px;">Sign Up</button>
+      </form>
+      <p style="text-align: center; margin-top: 20px; font-size: 13px;">
+        Already have an account? <a href="#" id="show-login" style="color: var(--accent); font-weight: 600; text-decoration: none;">Log in</a>
+      </p>
+    </div>
+  </div>
+</div>
+
+<main id="main-content" style="display:none">
+
+  <!-- ── Board Page ──────────────────────────────────────── -->
+  <div class="page active" id="page-board">
+    <div class="container">
+
+      <!-- Stats -->
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="s-label">Total</div>
+          <div class="s-value" id="stat-total">0</div>
+          <div class="s-sub">Applications</div>
+        </div>
+        <div class="stat-card c-applied">
+          <div class="s-label">Applied</div>
+          <div class="s-value" id="stat-applied">0</div>
+          <div class="s-sub">Awaiting response</div>
+        </div>
+        <div class="stat-card c-interview">
+          <div class="s-label">Interview</div>
+          <div class="s-value" id="stat-interview">0</div>
+          <div class="s-sub">In progress</div>
+        </div>
+        <div class="stat-card c-offer">
+          <div class="s-label">Offers</div>
+          <div class="s-value" id="stat-offer">0</div>
+          <div class="s-sub">Received</div>
+        </div>
+        <div class="stat-card c-rejected">
+          <div class="s-label">Success Rate</div>
+          <div class="s-value" id="stat-rate">0%</div>
+          <div class="s-sub">Offer / closed</div>
+        </div>
+      </div>
+
+      <!-- Toolbar -->
+      <div class="toolbar">
+        <div class="search-wrap">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+          </svg>
+          <input type="text" id="search-input" placeholder="Search by role, company, location…"/>
+        </div>
+      </div>
+
+      <!-- Kanban -->
+      <div class="kanban">
+        <div class="kanban-col">
+          <div class="col-header">
+            <div class="col-dot applied"></div>
+            <div class="col-title">Applied</div>
+            <div class="col-count" id="count-applied">0</div>
+          </div>
+          <div class="col-body" id="col-applied"></div>
+        </div>
+
+        <div class="kanban-col">
+          <div class="col-header">
+            <div class="col-dot interview"></div>
+            <div class="col-title">Interview</div>
+            <div class="col-count" id="count-interview">0</div>
+          </div>
+          <div class="col-body" id="col-interview"></div>
+        </div>
+
+        <div class="kanban-col">
+          <div class="col-header">
+            <div class="col-dot offer"></div>
+            <div class="col-title">Offer</div>
+            <div class="col-count" id="count-offer">0</div>
+          </div>
+          <div class="col-body" id="col-offer"></div>
+        </div>
+
+        <div class="kanban-col">
+          <div class="col-header">
+            <div class="col-dot rejected"></div>
+            <div class="col-title">Rejected</div>
+            <div class="col-count" id="count-rejected">0</div>
+          </div>
+          <div class="col-body" id="col-rejected"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── Analytics Page ──────────────────────────────────── -->
+  <div class="page" id="page-stats">
+    <div class="container">
+
+      <div style="margin-bottom:24px">
+        <h2 style="font-size:18px;font-weight:700">Analytics</h2>
+        <p style="color:var(--text-muted);font-size:13px;margin-top:4px">Visual breakdown of your job search progress</p>
+      </div>
+
+      <div class="charts-grid">
+
+        <!-- Donut -->
+        <div class="chart-card">
+          <h3>Status Breakdown</h3>
+          <div class="donut-wrap">
+            <div id="donut-svg"></div>
+            <div class="donut-legend" id="donut-legend"></div>
+          </div>
+        </div>
+
+        <!-- Bar -->
+        <div class="chart-card">
+          <h3>Applications by Status</h3>
+          <div class="bar-chart" id="bar-chart"></div>
+        </div>
+
+        <!-- Timeline -->
+        <div class="chart-card full">
+          <h3>Applications Over Time</h3>
+          <div class="timeline" id="timeline-chart"></div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<!-- ── Add / Edit Modal ─────────────────────────────────────── -->
+<div class="modal-backdrop" id="modal-backdrop">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="modal-title">Add Job Application</h2>
+      <button class="modal-close" id="modal-close" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body">
+      <form id="job-form" novalidate>
+        <div class="form-grid">
+          <div class="form-group">
+            <label for="f-role">Job Role *</label>
+            <input type="text" id="f-role" placeholder="e.g. Frontend Developer" maxlength="100" required/>
+          </div>
+          <div class="form-group">
+            <label for="f-company">Company *</label>
+            <input type="text" id="f-company" placeholder="e.g. Google" maxlength="100" required/>
+          </div>
+          <div class="form-group">
+            <label for="f-location">Location</label>
+            <input type="text" id="f-location" placeholder="e.g. Bangalore / Remote" maxlength="80"/>
+          </div>
+          <div class="form-group">
+            <label for="f-type">Job Type</label>
+            <select id="f-type">
+              <option>Full-time</option>
+              <option>Part-time</option>
+              <option>Internship</option>
+              <option>Contract</option>
+              <option>Remote</option>
+              <option>Hybrid</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="f-salary">Salary / Stipend</label>
+            <input type="text" id="f-salary" placeholder="e.g. ₹12-16 LPA" maxlength="60"/>
+          </div>
+          <div class="form-group">
+            <label for="f-status">Status</label>
+            <select id="f-status">
+              <option value="applied">Applied</option>
+              <option value="interview">Interview</option>
+              <option value="offer">Offer</option>
+              <option value="rejected">Rejected</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="f-date">Date Applied</label>
+            <input type="date" id="f-date"/>
+          </div>
+          <div class="form-group full">
+            <label for="f-resume">Resume / CV (PDF, DOCX)</label>
+            <input type="file" id="f-resume" accept=".pdf,.doc,.docx" style="padding-top: 8px;"/>
+            <div id="resume-status" style="font-size: 11px; margin-top: 4px; color: var(--text-muted);"></div>
+          </div>
+          <div class="form-group full">
+            <label for="f-notes">Notes</label>
+            <textarea id="f-notes" placeholder="Interview rounds, contacts, follow-up details…" maxlength="500"></textarea>
+          </div>
+        </div>
+      </form>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="btn-cancel">Cancel</button>
+      <button class="btn btn-primary" onclick="document.getElementById('job-form').requestSubmit()">Save Application</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Footer ───────────────────────────────────────────────── -->
+<footer>
+  <p>Built with ♥ for college mini project · <span>JobTracker</span> · Deployed on Render</p>
+</footer>
+
+<!-- Toast -->
+<div class="toast" id="toast" role="alert" aria-live="polite"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+<script src="/js/app.js"></script>
+
+</body>
+</html>

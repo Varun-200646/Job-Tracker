@@ -1,0 +1,22 @@
+[
+  {
+    "id": 1775400723992,
+    "username": "testuser",
+    "passwordHash": "$2b$10$WkIupFanh1z2so6EVTcBoedGf80cLb/gBdrvoD8Dklq6PmAHz7ERi"
+  },
+  {
+    "id": 1775400834568,
+    "username": "VarunMhatre",
+    "passwordHash": "$2b$10$MTLsK.kngmFaGTudFTAdF.1.IK1LtchHeZJLRkHij07CCCXpoEIsW"
+  },
+  {
+    "id": 1775400850388,
+    "username": "hjfbgkner",
+    "passwordHash": "$2b$10$fRtV2Ikp3dx.juW6lHvTjupUsEmF2fEW5u6hQQrx.3tsdYRptylSK"
+  },
+  {
+    "id": 1775402203883,
+    "username": "testuserTestUserNew",
+    "passwordHash": "$2b$10$Rru3sDTuRppYGKE03tuZ8ePW5.63AqmN86FJ8LyuvvHEfFCbdrW8q"
+  }
+]
