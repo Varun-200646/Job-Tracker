@@ -5,6 +5,7 @@ let jobs = [];
 let editingId = null;
 let searchQuery = "";
 let sortables = [];
+let resumeData = null; // Stored parsed resume from the AI module
 
 const STATUSES = ["applied", "interview", "offer", "rejected"];
 const STATUS_LABELS = { applied:"Applied", interview:"Interview", offer:"Offer", rejected:"Rejected" };
@@ -70,6 +71,7 @@ document.querySelectorAll(".nav-tab").forEach(tab => {
     tab.classList.add("active");
     document.getElementById("page-" + tab.dataset.page).classList.add("active");
     if (tab.dataset.page === "stats") renderCharts();
+    if (tab.dataset.page === "ai") renderAIPage();
     window.scrollTo({ top: 0, behavior: "smooth" });
   });
 });
@@ -135,7 +137,9 @@ function renderBoard() {
       return;
     }
 
-    col.innerHTML = cards.sort((a,b)=>new Date(b.date)-new Date(a.date)).map(j => `
+    col.innerHTML = cards.sort((a,b)=>new Date(b.date)-new Date(a.date)).map(j => {
+      const matchHtml = renderMatchBadge(j);
+      return `
       <div class="job-card" data-id="${j.id}">
         <div class="job-card-top">
           <div class="company-logo">${esc(initials(j.company))}</div>
@@ -152,6 +156,8 @@ function renderBoard() {
         <div class="job-date">Applied: ${fmtDate(j.date)}</div>
         ${j.notes ? `<div style="font-size:11px;color:var(--text-muted);margin-top:6px;font-style:italic;">"${esc(j.notes)}"</div>` : ""}
         
+        ${matchHtml}
+
         ${j.resumeUrl ? `
           <div style="margin-top:10px;">
             <a href="${j.resumeUrl}" target="_blank" class="btn btn-ghost btn-sm" style="font-size:10px;padding:3px 8px;border:1px solid var(--border)">
@@ -169,7 +175,7 @@ function renderBoard() {
           </select>
         </div>
       </div>
-    `).join("");
+    `}).join("");
   });
   updateStats();
   initSortable();
@@ -259,7 +265,10 @@ function openEdit(id) {
   document.getElementById("f-status").value   = job.status || "applied";
   document.getElementById("f-date").value     = job.date || "";
   document.getElementById("f-notes").value    = job.notes || "";
+  document.getElementById("f-jd").value       = job.jobDescription || "";
+  document.getElementById("f-vault-select").value = job.resumeId || "";
   document.getElementById("resume-status").textContent = job.resumeOriginalName ? `Current file: ${job.resumeOriginalName}` : "";
+  document.getElementById("modal-match-result").innerHTML = job.matchScore != null ? renderModalMatchResult(job) : "";
   openModal("Edit Job Application");
 }
 
@@ -272,19 +281,35 @@ document.getElementById("job-form").addEventListener("submit", async e => {
 
   if (!role || !company) { showToast("Role and Company are required", "error"); return; }
 
-  let resumeData = null;
+  const vaultSelect = document.getElementById("f-vault-select");
+  const vaultId = vaultSelect ? vaultSelect.value : "";
+  let vaultResumeInfo = null;
+
+  if (vaultId) {
+    const selected = vaultResumes.find(r => r.id === vaultId);
+    if (selected) {
+      vaultResumeInfo = { url: selected.url, originalName: selected.originalName, id: vaultId };
+    }
+  }
+
+  let uploadedResume = null;
   if (file) {
-    showToast("Uploading resume...", "info");
+    showToast("Uploading resume to Vault...", "info");
     const formData = new FormData();
     formData.append("resume", file);
+    formData.append("label", `Added for ${company} - ${role}`);
     try {
-      const res = await fetch("/api/upload", {
+      const res = await fetch("/api/vault/upload", {
         method: "POST",
         headers: { "Authorization": `Bearer ${token}` },
         body: formData
       });
       if (res.ok) {
-        resumeData = await res.json();
+        const result = await res.json();
+        const r = result.resume;
+        uploadedResume = { url: r.url, originalName: r.originalName, id: r.id };
+        vaultResumes.unshift(r);
+        renderVault();
       } else {
         showToast("Upload failed", "error");
       }
@@ -292,6 +317,10 @@ document.getElementById("job-form").addEventListener("submit", async e => {
       showToast("Server error during upload", "error");
     }
   }
+
+  const jobDescription = document.getElementById("f-jd").value.trim();
+
+  const finalResume = uploadedResume || vaultResumeInfo || (editingId ? { url: jobs.find(j => j.id === editingId).resumeUrl, originalName: jobs.find(j => j.id === editingId).resumeOriginalName, id: jobs.find(j => j.id === editingId).resumeId } : null);
 
   const data = {
     role,
@@ -302,9 +331,31 @@ document.getElementById("job-form").addEventListener("submit", async e => {
     status:   document.getElementById("f-status").value,
     date:     document.getElementById("f-date").value,
     notes:    document.getElementById("f-notes").value.trim(),
-    resumeUrl: resumeData ? resumeData.url : (editingId ? jobs.find(j => j.id === editingId).resumeUrl : null),
-    resumeOriginalName: resumeData ? resumeData.originalName : (editingId ? jobs.find(j => j.id === editingId).resumeOriginalName : null)
+    jobDescription: jobDescription,
+    resumeUrl: finalResume ? finalResume.url : null,
+    resumeOriginalName: finalResume ? finalResume.originalName : null,
+    resumeId: finalResume ? finalResume.id : null
   };
+
+  // Run AI match if job description is provided and resume is uploaded
+  if (jobDescription.length >= 10 && resumeData) {
+    try {
+      const matchRes = await fetch("/api/match-job", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+        body: JSON.stringify({ jobDescription })
+      });
+      if (matchRes.ok) {
+        const match = await matchRes.json();
+        data.matchScore = match.score;
+        data.matchedSkills = match.matchedSkills;
+        data.missingSkills = match.missingSkills;
+        data.matchRecommendation = match.recommendation;
+      }
+    } catch (err) {
+      console.warn("AI match failed, saving without score", err);
+    }
+  }
 
   if (editingId) {
     const idx = jobs.findIndex(j => j.id === editingId);
@@ -423,6 +474,7 @@ function checkAuth() {
     logoutBtn.style.display = "flex";
     addJobBtn.style.display = "flex";
     loadJobs();
+    loadVault();
   } else {
     authContainer.style.display = "flex";
     mainContent.style.display = "none";
@@ -514,5 +566,577 @@ document.getElementById("btn-logout").onclick = () => {
   showToast("Logged out", "info");
 };
 
+/* ── AI Feature: Match Badge on Job Cards ──────────────────────── */
+function renderMatchBadge(job) {
+  if (job.matchScore == null) return "";
+  const score = job.matchScore;
+  const tier = score >= 70 ? "strong" : score >= 45 ? "moderate" : "weak";
+  const icon = score >= 70 ? "✅" : score >= 45 ? "⚠️" : "❌";
+
+  let html = `<div class="match-badge ${tier}">${icon} ${score}% Match</div>`;
+
+  if (job.missingSkills && job.missingSkills.length > 0) {
+    const id = `ms-${job.id}`;
+    html += `
+      <div class="missing-skills-wrap">
+        <button class="missing-skills-toggle" onclick="toggleMissingSkills('${id}');event.stopPropagation()">Show missing skills (${job.missingSkills.length})</button>
+        <div class="missing-skills-list" id="${id}" style="display:none">
+          ${job.missingSkills.map(s => `<span class="missing-skill-pill">${esc(s)}</span>`).join("")}
+        </div>
+      </div>`;
+  }
+  return html;
+}
+
+function toggleMissingSkills(id) {
+  const el = document.getElementById(id);
+  if (el) el.style.display = el.style.display === "none" ? "flex" : "none";
+}
+
+function renderModalMatchResult(job) {
+  if (job.matchScore == null) return "";
+  const score = job.matchScore;
+  const tier = score >= 70 ? "strong" : score >= 45 ? "moderate" : "weak";
+  return `
+    <div class="ai-match-result">
+      <div class="match-header">
+        <div class="score-pill ${tier}">${score}%</div>
+        <div class="match-label">${esc(job.matchRecommendation || "")}</div>
+      </div>
+      ${job.matchedSkills && job.matchedSkills.length > 0 ? `
+        <div style="margin-top:6px">
+          <div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;margin-bottom:4px">Matched Skills</div>
+          <div class="skill-tags">
+            ${job.matchedSkills.map(s => `<span class="skill-tag">${esc(s)}</span>`).join("")}
+          </div>
+        </div>
+      ` : ""}
+      ${job.missingSkills && job.missingSkills.length > 0 ? `
+        <div style="margin-top:6px">
+          <div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;margin-bottom:4px">Missing Skills</div>
+          <div class="missing-skills-list" style="display:flex">
+            ${job.missingSkills.map(s => `<span class="missing-skill-pill">${esc(s)}</span>`).join("")}
+          </div>
+        </div>
+      ` : ""}
+    </div>`;
+}
+
+/* ── AI Feature: Load Resume Data ──────────────────────────────── */
+async function loadResumeData() {
+  if (!token) return;
+  try {
+    const res = await fetch("/api/resume", {
+      headers: { "Authorization": `Bearer ${token}` }
+    });
+    if (res.ok) {
+      const result = await res.json();
+      if (result.hasResume) {
+        resumeData = result.data;
+      }
+    }
+  } catch (err) {
+    console.warn("Could not load resume data", err);
+  }
+}
+
+/* ── AI Feature: Render AI Page ────────────────────────────────── */
+function renderAIPage() {
+  const infoEl = document.getElementById("resume-info-display");
+  if (!resumeData) {
+    infoEl.innerHTML = "";
+    return;
+  }
+  infoEl.innerHTML = `
+    <div class="resume-info">
+      <div class="resume-file-badge">✅ ${esc(resumeData.fileName)} · Uploaded ${new Date(resumeData.uploadedAt).toLocaleDateString()}</div>
+
+      ${resumeData.skills.length > 0 ? `
+        <div class="resume-section">
+          <div class="resume-section-title">Detected Skills (${resumeData.skills.length})</div>
+          <div class="skill-tags">
+            ${resumeData.skills.map(s => `<span class="skill-tag">${esc(s)}</span>`).join("")}
+          </div>
+        </div>
+      ` : ""}
+
+      ${resumeData.experience.length > 0 ? `
+        <div class="resume-section">
+          <div class="resume-section-title">Experience</div>
+          <div class="experience-list">
+            ${resumeData.experience.map(e => `<div class="experience-item">${esc(e)}</div>`).join("")}
+          </div>
+        </div>
+      ` : ""}
+
+      ${resumeData.education.length > 0 ? `
+        <div class="resume-section">
+          <div class="resume-section-title">Education</div>
+          <div class="experience-list">
+            ${resumeData.education.map(e => `<div class="experience-item">${esc(e)}</div>`).join("")}
+          </div>
+        </div>
+      ` : ""}
+    </div>`;
+}
+
+/* ── AI Feature: Resume Upload Handler ─────────────────────────── */
+function initAIUpload() {
+  const fileInput = document.getElementById("ai-resume-input");
+  const dropzone = document.getElementById("resume-dropzone");
+  const statusEl = document.getElementById("resume-upload-status");
+
+  if (!fileInput || !dropzone) return;
+
+  // Drag & drop visual feedback
+  dropzone.addEventListener("dragover", (e) => { e.preventDefault(); dropzone.classList.add("drag-over"); });
+  dropzone.addEventListener("dragleave", () => dropzone.classList.remove("drag-over"));
+  dropzone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dropzone.classList.remove("drag-over");
+    const file = e.dataTransfer.files[0];
+    if (file && file.name.toLowerCase().endsWith(".pdf")) {
+      uploadResumePDF(file);
+    } else {
+      showToast("Only PDF files are supported", "error");
+    }
+  });
+
+  fileInput.addEventListener("change", () => {
+    const file = fileInput.files[0];
+    if (file) uploadResumePDF(file);
+  });
+
+  async function uploadResumePDF(file) {
+    statusEl.innerHTML = `<div class="resume-uploading"><div class="spinner"></div> Parsing resume with AI…</div>`;
+
+    const formData = new FormData();
+    formData.append("resume", file);
+
+    try {
+      const res = await fetch("/api/upload-resume", {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${token}` },
+        body: formData
+      });
+      const result = await res.json();
+      if (res.ok) {
+        resumeData = result.data;
+        statusEl.innerHTML = "";
+        showToast(`Resume parsed! Found ${resumeData.skills.length} skills`, "success");
+        renderAIPage();
+      } else {
+        statusEl.innerHTML = "";
+        showToast(result.error || "Upload failed", "error");
+      }
+    } catch (err) {
+      statusEl.innerHTML = "";
+      showToast("Server error during upload", "error");
+    }
+  }
+}
+
+/* ── AI Feature: Quick Match ───────────────────────────────────── */
+function initQuickMatch() {
+  const btn = document.getElementById("btn-quick-match");
+  if (!btn) return;
+
+  btn.addEventListener("click", async () => {
+    const jd = document.getElementById("quick-jd").value.trim();
+    const resultEl = document.getElementById("quick-match-result");
+
+    if (!resumeData) {
+      resultEl.innerHTML = `<div class="no-resume-notice">⚠️ Upload your resume first to enable AI matching</div>`;
+      return;
+    }
+    if (jd.length < 10) {
+      showToast("Please enter a longer job description", "error");
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = "Analyzing…";
+
+    try {
+      const res = await fetch("/api/match-job", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+        body: JSON.stringify({ jobDescription: jd })
+      });
+      const match = await res.json();
+      if (res.ok) {
+        const tier = match.score >= 70 ? "strong" : match.score >= 45 ? "moderate" : "weak";
+        const color = match.score >= 70 ? "#22c55e" : match.score >= 45 ? "#f59e0b" : "#ef4444";
+        const circumference = 2 * Math.PI * 50;
+        const offset = circumference - (match.score / 100) * circumference;
+
+        resultEl.innerHTML = `
+          <div style="margin-top:20px">
+            <div class="score-ring-wrap">
+              <div class="score-ring">
+                <svg width="120" height="120" viewBox="0 0 120 120">
+                  <circle class="ring-bg" cx="60" cy="60" r="50"/>
+                  <circle class="ring-fill" cx="60" cy="60" r="50"
+                    stroke="${color}"
+                    stroke-dasharray="${circumference}"
+                    stroke-dashoffset="${offset}" />
+                </svg>
+                <div class="score-text">${match.score}%</div>
+              </div>
+              <div class="score-recommendation">${esc(match.recommendation)}</div>
+            </div>
+
+            ${match.matchedSkills.length > 0 ? `
+              <div class="resume-section" style="margin-top:16px">
+                <div class="resume-section-title">✅ Matched Skills (${match.matchedSkills.length})</div>
+                <div class="skill-tags">
+                  ${match.matchedSkills.map(s => `<span class="skill-tag">${esc(s)}</span>`).join("")}
+                </div>
+              </div>
+            ` : ""}
+
+            ${match.missingSkills.length > 0 ? `
+              <div class="resume-section" style="margin-top:12px">
+                <div class="resume-section-title">❌ Missing Skills (${match.missingSkills.length})</div>
+                <div class="missing-skills-list" style="display:flex">
+                  ${match.missingSkills.map(s => `<span class="missing-skill-pill">${esc(s)}</span>`).join("")}
+                </div>
+              </div>
+            ` : ""}
+          </div>`;
+      } else {
+        resultEl.innerHTML = `<div class="no-resume-notice">❌ ${esc(match.error || "Match failed")}</div>`;
+      }
+    } catch (err) {
+      resultEl.innerHTML = `<div class="no-resume-notice">❌ Server error</div>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "🧠 Analyze Match";
+    }
+  });
+}
+
+/* ── AI Feature: Modal JD Live Match ───────────────────────────── */
+let _jdDebounce;
+function initModalJDMatch() {
+  const jdField = document.getElementById("f-jd");
+  if (!jdField) return;
+
+  jdField.addEventListener("input", () => {
+    clearTimeout(_jdDebounce);
+    _jdDebounce = setTimeout(async () => {
+      const jd = jdField.value.trim();
+      const resultEl = document.getElementById("modal-match-result");
+
+      if (!resumeData) {
+        if (jd.length > 10) {
+          resultEl.innerHTML = `<div class="no-resume-notice">⚠️ Upload your resume in the AI Match tab to see match scores</div>`;
+        }
+        return;
+      }
+      if (jd.length < 10) {
+        resultEl.innerHTML = "";
+        return;
+      }
+
+      try {
+        const res = await fetch("/api/match-job", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+          body: JSON.stringify({ jobDescription: jd })
+        });
+        if (res.ok) {
+          const match = await res.json();
+          resultEl.innerHTML = renderModalMatchResult({
+            matchScore: match.score,
+            matchedSkills: match.matchedSkills,
+            missingSkills: match.missingSkills,
+            matchRecommendation: match.recommendation
+          });
+        }
+      } catch (err) {
+        // silently fail for live preview
+      }
+    }, 600);
+  });
+}
+
+/* ── Resume Vault ────────────────────────────────────────────────── */
+let vaultResumes = [];
+let vaultSelectedFile = null;
+
+async function loadVault() {
+  if (!token) return;
+  try {
+    const res = await fetch("/api/vault", {
+      headers: { "Authorization": `Bearer ${token}` }
+    });
+    if (res.ok) {
+      vaultResumes = await res.json();
+      renderVault();
+    }
+  } catch (err) {
+    console.warn("Could not load vault", err);
+  }
+}
+
+function renderVault() {
+  const grid = document.getElementById("vault-grid");
+  const empty = document.getElementById("vault-empty");
+  const select = document.getElementById("f-vault-select");
+  
+  if (select) {
+    select.innerHTML = `<option value="">-- Choose from Vault --</option>` + 
+      vaultResumes.map(r => `<option value="${r.id}">${esc(r.label)} (${esc(r.originalName)})</option>`).join("");
+  }
+
+  if (!grid) return;
+
+  if (vaultResumes.length === 0) {
+    grid.innerHTML = `
+      <div class="vault-empty" id="vault-empty">
+        <div class="vault-empty-icon">🗂️</div>
+        <div class="vault-empty-text">No resumes uploaded yet</div>
+        <div class="vault-empty-sub">Click "Upload Resume" to add your first file</div>
+      </div>`;
+    return;
+  }
+
+  grid.innerHTML = vaultResumes.map((r, idx) => {
+    const ext = (r.originalName || "").split(".").pop().toLowerCase();
+    const extClass = ["pdf", "docx", "doc"].includes(ext) ? ext : "other";
+    const fileSize = formatFileSize(r.fileSize);
+    const uploadDate = new Date(r.uploadedAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+    const tags = r.tags || [];
+    const hasJD = r.jobDescription && r.jobDescription.trim().length > 0;
+
+    return `
+      <div class="vault-card" style="animation-delay: ${idx * 0.05}s">
+        <div class="vault-card-top">
+          <div class="vault-file-icon ${extClass}">${ext.toUpperCase()}</div>
+          <div class="vault-card-info">
+            <div class="vault-card-label">${esc(r.label)}</div>
+            <div class="vault-card-filename">${esc(r.originalName)}</div>
+          </div>
+        </div>
+
+        ${tags.length > 0 ? `
+          <div class="vault-card-meta">
+            ${tags.map(t => `<span class="vault-tag">${esc(t)}</span>`).join("")}
+          </div>
+        ` : ""}
+
+        <div class="vault-card-details">
+          <span class="detail-item">📦 ${fileSize}</span>
+          <span class="detail-item">📅 ${uploadDate}</span>
+        </div>
+
+        ${hasJD ? `
+          <div class="vault-card-jd">
+            <button class="vault-jd-toggle" onclick="toggleVaultJD('vault-jd-${r.id}')">
+              📋 View Job Description
+            </button>
+            <div class="vault-jd-content" id="vault-jd-${r.id}" style="display: none;">
+              ${esc(r.jobDescription)}
+            </div>
+          </div>
+        ` : ""}
+
+        <div class="vault-card-actions">
+          <button class="btn-download" onclick="downloadVaultResume('${r.id}')">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Download
+          </button>
+          <button class="btn-delete-vault" onclick="deleteVaultResume('${r.id}')">
+            🗑 Delete
+          </button>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+function formatFileSize(bytes) {
+  if (!bytes) return "—";
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+function toggleVaultJD(id) {
+  const el = document.getElementById(id);
+  if (el) el.style.display = el.style.display === "none" ? "block" : "none";
+}
+
+async function downloadVaultResume(id) {
+  try {
+    const res = await fetch(`/api/vault/${id}/download`, {
+      headers: { "Authorization": `Bearer ${token}` }
+    });
+    if (!res.ok) {
+      showToast("Download failed", "error");
+      return;
+    }
+    // Get the filename from content-disposition header if available
+    const disposition = res.headers.get("Content-Disposition");
+    let filename = "resume";
+    if (disposition) {
+      const match = disposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+      if (match && match[1]) filename = match[1].replace(/['"]/g, "");
+    } else {
+      // Fallback: find the resume and use originalName
+      const resume = vaultResumes.find(r => r.id === id);
+      if (resume) filename = resume.originalName;
+    }
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+    showToast("Download started", "success");
+  } catch (err) {
+    showToast("Download error", "error");
+  }
+}
+
+async function deleteVaultResume(id) {
+  if (!confirm("Delete this resume from vault? The file will be permanently removed.")) return;
+  try {
+    const res = await fetch(`/api/vault/${id}`, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${token}` }
+    });
+    if (res.ok) {
+      vaultResumes = vaultResumes.filter(r => r.id !== id);
+      renderVault();
+      showToast("Resume deleted", "success");
+    } else {
+      showToast("Failed to delete", "error");
+    }
+  } catch (err) {
+    showToast("Server error", "error");
+  }
+}
+
+function initVault() {
+  const toggleBtn = document.getElementById("btn-vault-toggle-upload");
+  const uploadArea = document.getElementById("vault-upload-area");
+  const cancelBtn = document.getElementById("btn-vault-cancel");
+  const submitBtn = document.getElementById("btn-vault-submit");
+  const fileInput = document.getElementById("vault-file-input");
+  const dropzone = document.getElementById("vault-dropzone");
+  const statusEl = document.getElementById("vault-upload-status");
+
+  if (!toggleBtn || !uploadArea) return;
+
+  // Toggle upload area
+  toggleBtn.addEventListener("click", () => {
+    const isHidden = uploadArea.style.display === "none";
+    uploadArea.style.display = isHidden ? "block" : "none";
+    if (isHidden) uploadArea.scrollIntoView({ behavior: "smooth", block: "center" });
+  });
+
+  cancelBtn.addEventListener("click", () => {
+    uploadArea.style.display = "none";
+    resetVaultUpload();
+  });
+
+  // Drag visual feedback
+  dropzone.addEventListener("dragover", (e) => { e.preventDefault(); dropzone.classList.add("drag-over"); });
+  dropzone.addEventListener("dragleave", () => dropzone.classList.remove("drag-over"));
+  dropzone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dropzone.classList.remove("drag-over");
+    const file = e.dataTransfer.files[0];
+    if (file) selectVaultFile(file);
+  });
+
+  fileInput.addEventListener("change", () => {
+    if (fileInput.files[0]) selectVaultFile(fileInput.files[0]);
+  });
+
+  function selectVaultFile(file) {
+    const ext = file.name.split(".").pop().toLowerCase();
+    if (!["pdf", "doc", "docx"].includes(ext)) {
+      showToast("Only PDF and DOCX files are supported", "error");
+      return;
+    }
+    vaultSelectedFile = file;
+    dropzone.classList.add("file-selected");
+    dropzone.querySelector(".drop-title").textContent = file.name;
+    dropzone.querySelector(".drop-sub").textContent = formatFileSize(file.size) + " · Click to change";
+    submitBtn.disabled = false;
+  }
+
+  function resetVaultUpload() {
+    vaultSelectedFile = null;
+    fileInput.value = "";
+    dropzone.classList.remove("file-selected");
+    dropzone.querySelector(".drop-title").textContent = "Drop your resume here";
+    dropzone.querySelector(".drop-sub").textContent = "or click to browse · PDF, DOCX supported";
+    submitBtn.disabled = true;
+    document.getElementById("vault-label").value = "";
+    document.getElementById("vault-tags").value = "";
+    document.getElementById("vault-jd").value = "";
+    statusEl.innerHTML = "";
+  }
+
+  // Submit upload
+  submitBtn.addEventListener("click", async () => {
+    if (!vaultSelectedFile) return;
+
+    const label = document.getElementById("vault-label").value.trim() || vaultSelectedFile.name;
+    const tagsRaw = document.getElementById("vault-tags").value.trim();
+    const tags = tagsRaw ? tagsRaw.split(",").map(t => t.trim()).filter(Boolean) : [];
+    const jd = document.getElementById("vault-jd").value.trim();
+
+    submitBtn.disabled = true;
+    statusEl.innerHTML = `<div class="vault-uploading"><div class="spinner"></div> Uploading…</div>`;
+
+    const formData = new FormData();
+    formData.append("resume", vaultSelectedFile);
+    formData.append("label", label);
+    formData.append("tags", JSON.stringify(tags));
+    formData.append("jobDescription", jd);
+
+    try {
+      const res = await fetch("/api/vault/upload", {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${token}` },
+        body: formData
+      });
+      const result = await res.json();
+      if (res.ok) {
+        vaultResumes.unshift(result.resume);
+        renderVault();
+        showToast(`"${label}" uploaded to vault!`, "success");
+        resetVaultUpload();
+        uploadArea.style.display = "none";
+      } else {
+        showToast(result.error || "Upload failed", "error");
+        submitBtn.disabled = false;
+        statusEl.innerHTML = "";
+      }
+    } catch (err) {
+      showToast("Server error during upload", "error");
+      submitBtn.disabled = false;
+      statusEl.innerHTML = "";
+    }
+  });
+}
+
 /* ── Init ────────────────────────────────────────────────────── */
 checkAuth();
+initAIUpload();
+initQuickMatch();
+initModalJDMatch();
+initVault();
+if (token) {
+  loadResumeData();
+  loadVault();
+}
+

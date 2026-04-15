@@ -18,5 +18,20 @@
     "id": 1775402203883,
     "username": "testuserTestUserNew",
     "passwordHash": "$2b$10$Rru3sDTuRppYGKE03tuZ8ePW5.63AqmN86FJ8LyuvvHEfFCbdrW8q"
+  },
+  {
+    "id": 1775889403426,
+    "username": "testuseraitest",
+    "passwordHash": "$2b$10$qJKglgVc81SPKUwxMKa1yeeiMNxD7j0U9kMCnFAAP2Gb365muPC2m"
+  },
+  {
+    "id": 1775898190800,
+    "username": "testuserdemo",
+    "passwordHash": "$2b$10$JYCmYRQSo5f8mtRDdgBkgecK7AxcQryYsBp7MBT8jwt0MUbGlXbva"
+  },
+  {
+    "id": 1776263472792,
+    "username": "testusertest",
+    "passwordHash": "$2b$10$WJQJkEnre5nUF1NoUBoPXeBWVm7dm2uSvCJSW9RAEny6uVBIs.vN."
   }
 ]

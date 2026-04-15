@@ -1,25 +1,41 @@
+require("dotenv").config();
 const express = require("express");
 const path = require("path");
 const fs = require("fs-extra");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const multer = require("multer");
+const cloudinary = require("cloudinary").v2;
+const { CloudinaryStorage } = require("multer-storage-cloudinary");
+const { PDFParse } = require("pdf-parse");
+const { parseResume, computeMatch } = require("./ai/matcher");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const USERS_FILE = path.join(__dirname, "users.json");
 const JOBS_FILE = path.join(__dirname, "jobs.json");
+const RESUMES_FILE = path.join(__dirname, "resumes.json");
+const VAULT_FILE = path.join(__dirname, "vault.json");
 const UPLOADS_DIR = path.join(__dirname, "public", "uploads");
 const JWT_SECRET = "jobtracker-secret-key-123";
 
+// Ensure uploads directory exists
+fs.ensureDirSync(UPLOADS_DIR);
+
+// Configure Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
 // Configure Multer for resume uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, UPLOADS_DIR);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
+const storage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'jobtracker-resumes',
+    resource_type: 'raw',
+    allowed_formats: ['pdf', 'doc', 'docx']
   }
 });
 const upload = multer({ storage });
@@ -43,6 +59,22 @@ const getJobsData = async () => {
 
 const saveJobsData = async (data) => {
   await fs.writeJson(JOBS_FILE, data, { spaces: 2 });
+};
+
+const getResumesData = async () => {
+  try { return await fs.readJson(RESUMES_FILE); } catch (err) { return {}; }
+};
+
+const saveResumesData = async (data) => {
+  await fs.writeJson(RESUMES_FILE, data, { spaces: 2 });
+};
+
+const getVaultData = async () => {
+  try { return await fs.readJson(VAULT_FILE); } catch (err) { return {}; }
+};
+
+const saveVaultData = async (data) => {
+  await fs.writeJson(VAULT_FILE, data, { spaces: 2 });
 };
 
 // Auth Middleware
@@ -107,7 +139,7 @@ app.post("/api/upload", authenticateToken, upload.single("resume"), (req, res) =
     return res.status(400).json({ error: "No file uploaded" });
   }
   res.json({ 
-    url: `/uploads/${req.file.filename}`,
+    url: req.file.path,
     originalName: req.file.originalname
   });
 });
@@ -130,6 +162,233 @@ app.post("/api/jobs", authenticateToken, async (req, res) => {
     res.json({ message: "Jobs saved" });
   } catch (err) {
     res.status(500).json({ error: "Could not save jobs" });
+  }
+});
+
+// ── AI Resume Upload ────────────────────────────────────────────
+app.post("/api/upload-resume", authenticateToken, upload.single("resume"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+
+    // Only accept PDFs
+    if (!req.file.originalname.toLowerCase().endsWith(".pdf")) {
+      return res.status(400).json({ error: "Only PDF files are supported for AI parsing" });
+    }
+
+    // Read the uploaded file and extract text
+    const response = await fetch(req.file.path);
+    const arrayBuffer = await response.arrayBuffer();
+    const dataBuffer = Buffer.from(arrayBuffer);
+    const parser = new PDFParse({ verbosity: 0 });
+    await parser.load(dataBuffer);
+    const rawText = await parser.getText();
+
+    if (!rawText || rawText.trim().length < 20) {
+      return res.status(400).json({ error: "Could not extract enough text from this PDF. Try a different resume." });
+    }
+
+    // Parse resume into structured data
+    const parsed = parseResume(rawText);
+    parsed.uploadedAt = new Date().toISOString();
+    parsed.fileName = req.file.originalname;
+
+    // Store per user
+    const resumes = await getResumesData();
+    resumes[req.user.username] = parsed;
+    await saveResumesData(resumes);
+
+    res.json({
+      message: "Resume parsed successfully",
+      data: {
+        skills: parsed.skills,
+        experience: parsed.experience,
+        education: parsed.education,
+        fileName: parsed.fileName,
+        uploadedAt: parsed.uploadedAt
+      }
+    });
+  } catch (err) {
+    console.error("Resume upload error:", err);
+    res.status(500).json({ error: "Failed to parse resume" });
+  }
+});
+
+// ── AI Job Matching ─────────────────────────────────────────────
+app.post("/api/match-job", authenticateToken, async (req, res) => {
+  try {
+    const { jobDescription } = req.body;
+    if (!jobDescription || jobDescription.trim().length < 10) {
+      return res.status(400).json({ error: "Job description is too short" });
+    }
+
+    // Load user's resume
+    const resumes = await getResumesData();
+    const userResume = resumes[req.user.username];
+
+    if (!userResume) {
+      return res.status(404).json({ error: "No resume uploaded yet. Please upload your resume first." });
+    }
+
+    // Run AI match
+    const result = computeMatch(userResume, jobDescription);
+    res.json(result);
+  } catch (err) {
+    console.error("Match error:", err);
+    res.status(500).json({ error: "Failed to compute match" });
+  }
+});
+
+// ── Get stored resume data ──────────────────────────────────────
+app.get("/api/resume", authenticateToken, async (req, res) => {
+  try {
+    const resumes = await getResumesData();
+    const userResume = resumes[req.user.username];
+    if (!userResume) {
+      return res.json({ hasResume: false });
+    }
+    res.json({
+      hasResume: true,
+      data: {
+        skills: userResume.skills,
+        experience: userResume.experience,
+        education: userResume.education,
+        fileName: userResume.fileName,
+        uploadedAt: userResume.uploadedAt
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load resume data" });
+  }
+});
+
+// ── Resume Vault API ─────────────────────────────────────────────
+
+// Upload a resume to the vault
+app.post("/api/vault/upload", authenticateToken, upload.single("resume"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+
+    const { label, jobDescription, tags } = req.body;
+    const resumeEntry = {
+      id: Date.now() + "-" + Math.round(Math.random() * 1e9),
+      fileName: req.file.filename,
+      originalName: req.file.originalname,
+      label: label || req.file.originalname,
+      jobDescription: jobDescription || "",
+      tags: tags ? JSON.parse(tags) : [],
+      fileSize: req.file.size,
+      mimeType: req.file.mimetype,
+      uploadedAt: new Date().toISOString(),
+      url: req.file.path,
+      cloudinaryId: req.file.filename
+    };
+
+    const vault = await getVaultData();
+    if (!vault[req.user.username]) vault[req.user.username] = [];
+    vault[req.user.username].unshift(resumeEntry);
+    await saveVaultData(vault);
+
+    res.status(201).json({ message: "Resume uploaded", resume: resumeEntry });
+  } catch (err) {
+    console.error("Vault upload error:", err);
+    res.status(500).json({ error: "Failed to upload resume" });
+  }
+});
+
+// List all resumes in the vault
+app.get("/api/vault", authenticateToken, async (req, res) => {
+  try {
+    const vault = await getVaultData();
+    const userResumes = vault[req.user.username] || [];
+    res.json(userResumes);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load vault" });
+  }
+});
+
+// Download a specific resume
+app.get("/api/vault/:id/download", authenticateToken, async (req, res) => {
+  try {
+    const vault = await getVaultData();
+    const userResumes = vault[req.user.username] || [];
+    const resume = userResumes.find(r => r.id === req.params.id);
+
+    if (!resume) {
+      return res.status(404).json({ error: "Resume not found" });
+    }
+
+    if (resume.url) {
+      return res.redirect(resume.url);
+    } else {
+      const filePath = path.join(UPLOADS_DIR, resume.fileName);
+      if (!await fs.pathExists(filePath)) {
+        return res.status(404).json({ error: "File no longer exists on server" });
+      }
+      return res.download(filePath, resume.originalName);
+    }
+  } catch (err) {
+    console.error("Download error:", err);
+    res.status(500).json({ error: "Failed to download resume" });
+  }
+});
+
+// Delete a resume from the vault
+app.delete("/api/vault/:id", authenticateToken, async (req, res) => {
+  try {
+    const vault = await getVaultData();
+    const userResumes = vault[req.user.username] || [];
+    const resumeIndex = userResumes.findIndex(r => r.id === req.params.id);
+
+    if (resumeIndex === -1) {
+      return res.status(404).json({ error: "Resume not found" });
+    }
+
+    const resume = userResumes[resumeIndex];
+
+    // Delete the file from Cloudinary or disk
+    if (resume.cloudinaryId) {
+      await cloudinary.uploader.destroy(resume.cloudinaryId, { resource_type: 'raw' });
+    } else {
+      const filePath = path.join(UPLOADS_DIR, resume.fileName);
+      if (await fs.pathExists(filePath)) {
+        await fs.remove(filePath);
+      }
+    }
+
+    userResumes.splice(resumeIndex, 1);
+    vault[req.user.username] = userResumes;
+    await saveVaultData(vault);
+
+    res.json({ message: "Resume deleted" });
+  } catch (err) {
+    console.error("Delete error:", err);
+    res.status(500).json({ error: "Failed to delete resume" });
+  }
+});
+
+// Update resume metadata (label, tags)
+app.patch("/api/vault/:id", authenticateToken, async (req, res) => {
+  try {
+    const vault = await getVaultData();
+    const userResumes = vault[req.user.username] || [];
+    const resume = userResumes.find(r => r.id === req.params.id);
+
+    if (!resume) {
+      return res.status(404).json({ error: "Resume not found" });
+    }
+
+    if (req.body.label) resume.label = req.body.label;
+    if (req.body.tags) resume.tags = req.body.tags;
+    if (req.body.jobDescription !== undefined) resume.jobDescription = req.body.jobDescription;
+
+    await saveVaultData(vault);
+    res.json({ message: "Resume updated", resume });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to update resume" });
   }
 });
 
